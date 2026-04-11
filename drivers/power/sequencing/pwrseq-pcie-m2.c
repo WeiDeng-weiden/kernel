@@ -244,7 +244,7 @@ err_destroy_changeset:
 	return ret;
 }
 
-static int pwrseq_pcie_m2_create_serdev(struct pwrseq_pcie_m2_ctx *ctx,
+static int __pwrseq_pcie_m2_create_serdev(struct pwrseq_pcie_m2_ctx *ctx,
 					struct pci_dev *pdev)
 {
 	struct serdev_controller *serdev_ctrl;
@@ -266,6 +266,16 @@ static int pwrseq_pcie_m2_create_serdev(struct pwrseq_pcie_m2_ctx *ctx,
 		serdev_controller_put(serdev_ctrl);
 		return 0;
 	}
+
+	/* Bail out if the serdev device was already created for the PCI dev */
+	mutex_lock(&ctx->list_lock);
+	list_for_each_entry(pci_dev, &ctx->pci_devices, list) {
+		if (pci_dev->pdev == pdev) {
+			mutex_unlock(&ctx->list_lock);
+			return 0;
+		}
+	}
+	mutex_unlock(&ctx->list_lock);
 
 	pci_dev = kzalloc(sizeof(*pci_dev), GFP_KERNEL);
 	if (!pci_dev) {
@@ -376,7 +386,7 @@ static int pwrseq_pcie_m2_notify(struct notifier_block *nb, unsigned long action
 	switch (action) {
 	case BUS_NOTIFY_ADD_DEVICE:
 		if (pci_match_id(pwrseq_m2_pci_ids, pdev)) {
-			ret = pwrseq_pcie_m2_create_serdev(ctx, pdev);
+			ret = __pwrseq_pcie_m2_create_serdev(ctx, pdev);
 			if (ret)
 				return notifier_from_errno(ret);
 		}
@@ -410,21 +420,42 @@ static bool pwrseq_pcie_m2_check_remote_node(struct device *dev, u8 port, u8 end
  */
 static int pwrseq_pcie_m2_register_notifier(struct pwrseq_pcie_m2_ctx *ctx, struct device *dev)
 {
+	struct pci_dev *pdev = NULL;
 	int ret;
 
 	/*
 	 * Register a PCI notifier for Key E connector that has PCIe as Port
 	 * 0/Endpoint 0 interface and Serial as Port 3/Endpoint 0 interface.
 	 */
-	if (pwrseq_pcie_m2_check_remote_node(dev, 3, 0, "serial")) {
-		if (pwrseq_pcie_m2_check_remote_node(dev, 0, 0, "pcie")) {
-			ctx->dev = dev;
-			ctx->nb.notifier_call = pwrseq_pcie_m2_notify;
-			ret = bus_register_notifier(&pci_bus_type, &ctx->nb);
-			if (ret)
-				return dev_err_probe(dev, ret,
-						     "Failed to register notifier for serdev\n");
-		}
+	if (!pwrseq_pcie_m2_check_remote_node(dev, 3, 0, "serial") ||
+	    !pwrseq_pcie_m2_check_remote_node(dev, 0, 0, "pcie"))
+		return 0;
+
+	ctx->dev = dev;
+	ctx->nb.notifier_call = pwrseq_pcie_m2_notify;
+	ret = bus_register_notifier(&pci_bus_type, &ctx->nb);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to register notifier for serdev\n");
+
+	struct device_node *pci_parent __free(device_node) =
+				of_graph_get_remote_node(dev_of_node(ctx->dev), 0, 0);
+	if (!pci_parent)
+		return 0;
+
+	/* Create serdev for existing PCI devices if required */
+	for_each_pci_dev(pdev) {
+		if (!pdev->dev.parent || pci_parent != pdev->dev.parent->of_node)
+			continue;
+
+		if (!pci_match_id(pwrseq_m2_pci_ids, pdev))
+			continue;
+
+		ret = __pwrseq_pcie_m2_create_serdev(ctx, pdev);
+		if (ret)
+			dev_err_probe(dev, ret,
+				     "Failed to create serdev for PCI device (%s)\n",
+					pci_name(pdev));
 	}
 
 	return 0;
