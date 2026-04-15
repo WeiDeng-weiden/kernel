@@ -363,6 +363,7 @@ static void pwrseq_pcie_m2_remove_serdev(struct pwrseq_pcie_m2_ctx *ctx,
 
 static const struct pci_device_id pwrseq_m2_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, 0x1107) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_QCOM, 0x1103) },
 	{ } /* Sentinel */
 };
 
