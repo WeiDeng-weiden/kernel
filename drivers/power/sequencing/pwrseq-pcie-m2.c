@@ -210,7 +210,7 @@ static int pwrseq_pcie_m2_create_bt_node(struct pwrseq_pcie_m2_ctx *ctx,
 
 	compatible = (const char *)id->driver_data;
 
-	pci_dev->ocs = kzalloc_obj(*pci_dev->ocs);
+	pci_dev->ocs = kzalloc(sizeof(*pci_dev->ocs), GFP_KERNEL);
 	if (!pci_dev->ocs)
 		return -ENOMEM;
 
